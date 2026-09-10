@@ -198,10 +198,13 @@
     <div class="field">
       <div class="label"><span>模型</span><span class="hint">可拉取 / 手填</span></div>
       <div class="row">
-        <input id="model" list="modelsList" placeholder="model-name" />
+        <select id="model" aria-label="模型选择">
+          <option value="">请先拉取模型</option>
+          <option value="__manual__">手动填写模型…</option>
+        </select>
         <button class="pull" id="pullModels">拉取模型</button>
       </div>
-      <datalist id="modelsList"></datalist>
+      <input id="manualModel" placeholder="输入模型名称，例如 gpt-4.1-mini" style="display:none;margin-top:9px" />
     </div>
     <div class="field">
       <div class="label"><span>创造力</span><span class="hint" id="tempText">0.90</span></div>
@@ -324,6 +327,31 @@ function authHeaders(){
   const k=$("#apiKey").value.trim();
   return {"Content-Type":"application/json", ...(k?{"Authorization":`Bearer ${k}`}:{})};
 }
+function syncManualModel(){
+  const manual=$("#model").value==="__manual__";
+  $("#manualModel").style.display=manual?"block":"none";
+}
+function getModelValue(){
+  const v=$("#model").value;
+  return v==="__manual__"?$("#manualModel").value.trim():v.trim();
+}
+function setModelValue(value){
+  const select=$("#model");
+  const v=(value||"").trim();
+  if(!v){ select.value=""; syncManualModel(); return; }
+  const exists=[...select.options].some(o=>o.value===v);
+  if(exists){
+    select.value=v;
+  }else{
+    const opt=document.createElement("option");
+    opt.value=v; opt.textContent=v;
+    const manual=[...select.options].find(o=>o.value==="__manual__");
+    select.insertBefore(opt,manual||null);
+    select.value=v;
+  }
+  syncManualModel();
+}
+$("#model").addEventListener("change",syncManualModel);
 
 $$("#orientation button").forEach(btn=>btn.onclick=()=>{
   $$("#orientation button").forEach(x=>x.classList.remove("active"));
@@ -367,7 +395,7 @@ function loadSettings(){
   if(saved){
     $("#apiUrl").value=saved.url||"";
     $("#apiKey").value=saved.key||"";
-    $("#model").value=saved.model||"";
+    setModelValue(saved.model||"");
     $("#temperature").value=saved.temperature||0.9;
     $("#tempText").textContent=(+$("#temperature").value).toFixed(2);
     $("#rememberApi").checked=true;
@@ -375,7 +403,7 @@ function loadSettings(){
     const nonSecret=JSON.parse(localStorage.getItem("charGen.public")||"null");
     if(nonSecret){
       $("#apiUrl").value=nonSecret.url||"";
-      $("#model").value=nonSecret.model||"";
+      setModelValue(nonSecret.model||"");
       $("#temperature").value=nonSecret.temperature||0.9;
       $("#tempText").textContent=(+$("#temperature").value).toFixed(2);
     }
@@ -384,7 +412,7 @@ function loadSettings(){
 loadSettings();
 
 $("#saveSettings").onclick=()=>{
-  const data={url:$("#apiUrl").value.trim(),key:$("#apiKey").value.trim(),model:$("#model").value.trim(),temperature:+$("#temperature").value};
+  const data={url:$("#apiUrl").value.trim(),key:$("#apiKey").value.trim(),model:getModelValue(),temperature:+$("#temperature").value};
   localStorage.setItem("charGen.public",JSON.stringify({url:data.url,model:data.model,temperature:data.temperature}));
   if($("#rememberApi").checked) localStorage.setItem("charGen.api",JSON.stringify(data));
   else localStorage.removeItem("charGen.api");
@@ -399,11 +427,18 @@ $("#pullModels").onclick=async()=>{
     const r=await fetch(base+"/models",{headers:authHeaders()});
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const d=await r.json();
-    const models=(d.data||d.models||[]).map(x=>typeof x==="string"?x:(x.id||x.name)).filter(Boolean);
+    const rawModels=Array.isArray(d)?d:(d.data||d.models||d.result||[]);
+    const models=[...new Set(rawModels.map(x=>typeof x==="string"?x:(x?.id||x?.name||x?.model)).filter(Boolean))];
     if(!models.length) throw new Error("接口没有返回模型列表");
-    $("#modelsList").innerHTML=models.map(x=>`<option value="${esc(x)}"></option>`).join("");
-    if(!$("#model").value) $("#model").value=models[0];
-    toast(`已拉取 ${models.length} 个模型`);
+    const previous=getModelValue();
+    const select=$("#model");
+    select.innerHTML='<option value="">请选择模型</option>'+
+      models.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join("")+
+      '<option value="__manual__">手动填写模型…</option>';
+    if(previous && models.includes(previous)) select.value=previous;
+    else select.value=models[0];
+    syncManualModel();
+    toast(`已拉取 ${models.length} 个模型，点下拉框选择`);
   }catch(e){toast("拉取失败："+e.message);}
   finally{btn.disabled=false;btn.textContent="拉取模型";}
 };
@@ -459,7 +494,7 @@ function validateBasic(obj){
 
 $("#generate").onclick=async()=>{
   syncCustomAge();
-  const base=apiBase(), model=$("#model").value.trim();
+  const base=apiBase(), model=getModelValue();
   if(!base || !model){$("#settings").showModal();toast("先配置 API 地址和模型");return;}
   const btn=$("#generate");btn.disabled=true;$("#status").classList.add("show");
   try{
